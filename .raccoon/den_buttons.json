@@ -1,0 +1,40 @@
+{
+  "buttons": [
+    {
+      "id": "start",
+      "label": "start",
+      "argv": [
+        "./dev.sh",
+        "start"
+      ],
+      "timeout_s": 60.0
+    },
+    {
+      "id": "restart",
+      "label": "restart",
+      "argv": [
+        "./dev.sh",
+        "restart"
+      ],
+      "timeout_s": 60.0
+    },
+    {
+      "id": "stop",
+      "label": "stop",
+      "argv": [
+        "./dev.sh",
+        "stop"
+      ],
+      "timeout_s": 60.0
+    },
+    {
+      "id": "tests",
+      "label": "tests",
+      "argv": [
+        "./dev.sh",
+        "check"
+      ],
+      "timeout_s": 60.0
+    }
+  ]
+}
