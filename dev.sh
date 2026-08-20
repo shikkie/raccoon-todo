@@ -127,58 +127,149 @@ descendants() {
   done
 }
 
-kill_tree() {
+tree_pids() {
   local pid="$1"
-  local sig="${2:-TERM}"
-  local targets=("$pid")
-  local kid
-  while IFS= read -r kid; do
-    [[ -n "$kid" ]] && targets+=("$kid")
-  done < <(descendants "$pid")
+  descendants "$pid"
+  printf '%s\n' "$pid"
+}
 
+kill_pids() {
+  local sig="$1"
+  shift
   local t
-  for t in "${targets[@]}"; do
-    kill "-$sig" "$t" 2>/dev/null || true
+  for t in "$@"; do
+    [[ -n "$t" ]] && kill "-$sig" "$t" 2>/dev/null || true
   done
 }
 
-wait_gone() {
-  local pid="$1"
-  local i
-  for i in $(seq 1 "$STOP_WAIT_SECS"); do
-    pid_alive "$pid" || return 0
-    sleep 1
+any_alive() {
+  local p
+  for p in "$@"; do
+    pid_alive "$p" && return 0
   done
   return 1
+}
+
+wait_pids_gone() {
+  local i
+  for i in $(seq 1 $((STOP_WAIT_SECS * 10))); do
+    any_alive "$@" || return 0
+    sleep 0.1
+  done
+  any_alive "$@" && return 1
+  return 0
+}
+
+wait_port_free() {
+  local host="$1"
+  local port="$2"
+  local i
+  for i in $(seq 1 $((STOP_WAIT_SECS * 10))); do
+    can_bind "$host" "$port" 2>/dev/null && return 0
+    sleep 0.1
+  done
+  can_bind "$host" "$port" 2>/dev/null
+}
+
+# PIDs with a TCP LISTEN on this port (IPv4 or IPv6).
+listeners_on_port() {
+  local port="$1"
+  python3 - "$port" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+port = int(sys.argv[1])
+want = f"{port:04X}"
+inodes = set()
+for table in ("/proc/net/tcp", "/proc/net/tcp6"):
+    path = Path(table)
+    if not path.exists():
+        continue
+    lines = path.read_text().splitlines()[1:]
+    for line in lines:
+        parts = line.split()
+        if len(parts) < 10:
+            continue
+        local, state, inode = parts[1], parts[3], parts[9]
+        if state != "0A":  # LISTEN
+            continue
+        if local.rsplit(":", 1)[-1].upper() == want:
+            inodes.add(inode)
+
+pids = set()
+fd_pat = re.compile(r"socket:\[(\d+)\]")
+for fd in Path("/proc").glob("[0-9]*/fd/*"):
+    try:
+        target = os.readlink(fd)
+    except OSError:
+        continue
+    match = fd_pat.fullmatch(target)
+    if match and match.group(1) in inodes:
+        pids.add(fd.parts[2])
+for pid in sorted(pids, key=int):
+    print(pid)
+PY
+}
+
+kill_leftover_listeners() {
+  local name="$1"
+  local port="$2"
+  local -a leftovers=()
+  mapfile -t leftovers < <(listeners_on_port "$port")
+  if [[ "${#leftovers[@]}" -eq 0 ]]; then
+    return 0
+  fi
+  log "$name: killing leftover listeners on :${port} (pids ${leftovers[*]})"
+  kill_pids KILL "${leftovers[@]}"
 }
 
 stop_one() {
   local name="$1"
   local pidfile="$2"
+  local host="$3"
+  local port="$4"
   local pid
+  local -a tree=()
 
   pid="$(read_pid "$pidfile")"
-  if [[ -z "$pid" ]]; then
+  if [[ -z "$pid" ]] || ! pid_alive "$pid"; then
+    if [[ -z "$pid" ]]; then
+      log "$name: not tracked"
+    else
+      log "$name: stale pid $pid (already gone)"
+    fi
     rm -f "$pidfile"
-    log "$name: not tracked"
-    return 0
-  fi
-  if ! pid_alive "$pid"; then
-    rm -f "$pidfile"
-    log "$name: stale pid $pid (already gone)"
+    if ! wait_port_free "$host" "$port"; then
+      kill_leftover_listeners "$name" "$port"
+      wait_port_free "$host" "$port" || {
+        log "$name: ${host}:${port} still busy after stop"
+        return 1
+      }
+    fi
     return 0
   fi
 
-  log "$name: stopping pid $pid"
+  mapfile -t tree < <(tree_pids "$pid")
+  log "$name: stopping pid $pid (tree ${#tree[@]} procs)"
   kill -- "-$pid" 2>/dev/null || true
-  kill_tree "$pid" TERM
-  if ! wait_gone "$pid"; then
+  kill_pids TERM "${tree[@]}"
+  if ! wait_pids_gone "${tree[@]}"; then
     log "$name: still alive, sending KILL"
     kill -- "-$pid" 2>/dev/null || true
-    kill_tree "$pid" KILL
-    wait_gone "$pid" || true
+    kill_pids KILL "${tree[@]}"
+    wait_pids_gone "${tree[@]}" || true
   fi
   rm -f "$pidfile"
+
+  if ! wait_port_free "$host" "$port"; then
+    kill_leftover_listeners "$name" "$port"
+    if ! wait_port_free "$host" "$port"; then
+      log "$name: ${host}:${port} still busy after stop"
+      return 1
+    fi
+  fi
 }
 
 can_bind() {
@@ -296,10 +387,16 @@ start_api() {
 }
 
 start_frontend() {
+  local vite="$ROOT/frontend/node_modules/.bin/vite"
+  if [[ ! -x "$vite" ]]; then
+    die "vite is not installed (missing ${vite}); run npm install in frontend/"
+  fi
   : >"$FRONT_LOG"
+  # Track vite itself so stop waits on the process that owns :$FRONT_PORT,
+  # not the npm wrapper which can exit first and leave node listening.
   (
     cd "$ROOT/frontend"
-    exec setsid npm run dev -- --host "$FRONT_HOST" --port "$FRONT_PORT" --strictPort
+    exec setsid "$vite" --host "$FRONT_HOST" --port "$FRONT_PORT" --strictPort
   ) >>"$FRONT_LOG" 2>&1 &
   echo $! >"$FRONT_PID_FILE"
   log "frontend: pid $(read_pid "$FRONT_PID_FILE"), logging ${FRONT_LOG}"
@@ -307,8 +404,12 @@ start_frontend() {
 
 cmd_stop() {
   ensure_dirs
-  stop_one "$FRONT_NAME" "$FRONT_PID_FILE"
-  stop_one "$API_NAME" "$API_PID_FILE"
+  local failed=0
+  stop_one "$FRONT_NAME" "$FRONT_PID_FILE" "$FRONT_HOST" "$FRONT_PORT" || failed=1
+  stop_one "$API_NAME" "$API_PID_FILE" "$API_HOST" "$API_PORT" || failed=1
+  if [[ "$failed" -ne 0 ]]; then
+    die "stop finished but a port is still bound; not starting over it"
+  fi
 }
 
 cmd_start() {
