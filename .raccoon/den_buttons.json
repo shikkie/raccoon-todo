@@ -28,6 +28,15 @@
       "timeout_s": 60.0
     },
     {
+      "id": "status",
+      "label": "status",
+      "argv": [
+        "./dev.sh",
+        "status"
+      ],
+      "timeout_s": 15.0
+    },
+    {
       "id": "tests",
       "label": "tests",
       "argv": [

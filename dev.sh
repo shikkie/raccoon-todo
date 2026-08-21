@@ -25,13 +25,14 @@ LISTEN_WAIT_SECS=15
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [start|stop|restart|status|check]
+Usage: $(basename "$0") [start|stop|restart|status|check|bootstrap]
 
   start     Launch API (:${API_PORT}) and frontend (:${FRONT_PORT}) [default]
   stop      Stop both, using tracked PIDs
   restart   Stop then start
   status    Show PIDs, ports, and whether they look alive
   check     Run pytest (extra args are passed through)
+  bootstrap Create backend/.venv, pip install, npm install (no servers)
 
 API listens on ${API_HOST}:${API_PORT}
 Frontend listens on ${FRONT_HOST}:${FRONT_PORT} (any Host header)
@@ -91,7 +92,7 @@ frontend_url() {
   if ip="$(lan_ipv4)"; then
     printf 'http://%s:%s/' "$ip" "$FRONT_PORT"
   else
-    die "could not find a non-loopback IPv4 to advertise for the frontend"
+    printf 'http://127.0.0.1:%s/' "$FRONT_PORT"
   fi
 }
 
@@ -441,6 +442,12 @@ cmd_restart() {
   cmd_start
 }
 
+cmd_bootstrap() {
+  ensure_venv
+  ensure_frontend_deps
+  log "workspace deps ready"
+}
+
 cmd_check() {
   ensure_venv
   log "running pytest in backend/"
@@ -476,6 +483,7 @@ main() {
     restart) cmd_restart ;;
     status) cmd_status ;;
     check) cmd_check "$@" ;;
+    bootstrap) cmd_bootstrap ;;
     -h|--help|help) usage ;;
     *)
       usage >&2

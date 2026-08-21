@@ -7,7 +7,7 @@ Keep it simple, cute, and easy for agents to change in a short session.
 
 - Backend: Python Flask on **127.0.0.1:9999**
 - Frontend: Vite + React (JavaScript, not TypeScript) on **0.0.0.0:9998** (any Host header)
-- Runner: `./dev.sh` start/stop/restart/status (venv, PIDs, bind-or-fail)
+- Runner: `./dev.sh` start/stop/restart/status/bootstrap (venv, PIDs, bind-or-fail)
 - Persistence: one JSON file, not a real database
 - Theme: woodland raccoon / trash-panda den. Fun copy is encouraged.
 
@@ -33,6 +33,7 @@ From the repo root:
 
 ```bash
 # usual path — sources the venv, tracks PIDs, fails if ports cannot bind
+./dev.sh bootstrap      # venv + pip + npm only (den clone-time)
 ./dev.sh start
 ./dev.sh status
 ./dev.sh restart

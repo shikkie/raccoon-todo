@@ -9,6 +9,7 @@ Little paws. Little tasks. One `todos.json`.
 ## Run it
 
 ```bash
+./dev.sh bootstrap # venv + pip + npm (no servers); herder --demo runs this after clone
 ./dev.sh start     # API :9999, UI :9998 (0.0.0.0, any Host)
 ./dev.sh status
 ./dev.sh restart
